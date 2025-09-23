@@ -18,14 +18,24 @@ app = FastAPI(title="ChildSafe RAG API")
 
 # Configure Cross-Origin Resource Sharing (CORS)
 # This allows frontend clients (React/Vue/etc.) to make API requests
+frontend_url = os.getenv("FRONTEND_URL")
+allow_origins = []
+
+# Add production URL if set
+if frontend_url:
+    allow_origins.append(frontend_url)
+
+# Always add localhost for development
+allow_origins.extend([
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000"
+])
+
 app.add_middleware(
     CORSMiddleware,
-    # Allow frontend URL from env, fallback to localhost or all origins (*)
-    allow_origins=(
-        [os.getenv("FRONTEND_URL")]
-        if os.getenv("FRONTEND_URL")
-        else ["http://localhost:5173", "http://localhost:3000", "*"]
-    ),
+    allow_origins=allow_origins,
     allow_credentials=True,  # Allow cookies/headers for auth if needed
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allow all headers
