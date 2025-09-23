@@ -19,5 +19,6 @@ dependencies = [
     "pypdf2>=3.0.1",
     "fabric>=3.2.2",
     "langchain>=0.3.27",
+    "tavily-python",
 ]
 requires-python = ">=3.10"
