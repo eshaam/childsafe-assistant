@@ -1,18 +1,23 @@
-from fabric import Connection, task 
+from fabric import Connection, task
 import os
-from pathlib import Path
 
 # Configuration
-APP_NAME = "childsafe-multi-agent-rag"
+APP_NAME = "childsafe-assistant"
 REMOTE_HOST = "156.155.253.118"
 REMOTE_USER = "deploy"
 REMOTE_PATH = f"/home/deploy/{APP_NAME}"
-REPO_URL = f"https://github.com/eshaam/{APP_NAME}"
+REPO_URL = f"git@github.com:eshaam/{APP_NAME}.git"
 SSH_KEY_PATH = "~/.ssh/id_rsa"  # Default SSH key path
+
+# uv binary path (installed in ~/.local/bin by default)
+UV_BIN = "~/.local/bin/uv"
+
+# Default port (can be overridden in tasks)
+DEFAULT_PORT = 8888
 
 
 @task
-def deploy(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
+def deploy(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH, port=DEFAULT_PORT):
     """Deploy the application to the remote server"""
     connect_kwargs = {"key_filename": os.path.expanduser(key_path)}
     with Connection(f"{user}@{host}", connect_kwargs=connect_kwargs) as conn:
@@ -26,25 +31,17 @@ def deploy(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
             # Pull latest code
             print("📥 Pulling latest code...")
             try:
-                conn.run("git pull origin master")
+                conn.run("git pull origin main")
             except:
                 print("🔄 Cloning repository...")
-                conn.run(f"git clone {REPO_URL}.git .")
+                conn.run(f"git clone {REPO_URL} .")
 
             # Backend deployment
-            print("🐍 Setting up Python backend...")
+            print("🐍 Setting up Python backend with uv...")
             with conn.cd("backend"):
-                # Create virtual environment if it doesn't exist
-                conn.run("python3 -m venv venv || true")
-
-                # Install dependencies with timeout and better options
-                conn.run("venv/bin/pip install --upgrade pip")
-                conn.run("venv/bin/pip install -r requirements.txt --timeout 300 --no-cache-dir")
-
-                # Create necessary directories
+                conn.run(f"{UV_BIN} sync --frozen")
                 conn.run("mkdir -p config models logs")
 
-                # Copy environment file if it doesn't exist
                 result = conn.run("test -f .env", warn=True)
                 if result.failed:
                     conn.run("cp .env.example .env")
@@ -54,31 +51,26 @@ def deploy(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
             print("⚛️  Building React frontend...")
             with conn.cd("frontend"):
                 conn.run("npm install")
-
-                # Build for production
                 conn.run("npm run build")
 
-            conn.run(f"pm2 restart {APP_NAME}")
-            conn.run("pm2 save")
-            
-            print("✅ Deployment completed successfully!")
+            restart_services(conn, port)
 
+            print("✅ Deployment completed successfully!")
 
 
 @task
 def setup(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH, sudo_pass=None):
     """Initial server setup"""
     connect_kwargs = {"key_filename": os.path.expanduser(key_path)}
-    
-    # Configure sudo settings
-    sudo_config = {}
-    if sudo_pass:
-        sudo_config["password"] = sudo_pass
-    
+
     with Connection(f"{user}@{host}", connect_kwargs=connect_kwargs) as conn:
-        # Set sudo configuration on the connection
         conn.config.sudo.password = sudo_pass if sudo_pass else None
         print("🛠️  Setting up server...")
+
+        # Install uv if not installed
+        conn.run("curl -LsSf https://astral.sh/uv/install.sh | sh || true")
+        conn.run("mkdir -p ~/.local/bin")
+        conn.run("echo 'export PATH=$HOME/.local/bin:$PATH' >> ~/.bashrc")
 
         # Install PM2 for process management
         conn.sudo("npm install -g pm2")
@@ -89,34 +81,34 @@ def setup(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH, sudo_pas
 
         print("✅ Server setup completed!")
 
+
 @task
-def restart_services(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
+def restart_services(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH, port=DEFAULT_PORT):
     """Restart application services"""
     connect_kwargs = {"key_filename": os.path.expanduser(key_path)}
     with Connection(f"{user}@{host}", connect_kwargs=connect_kwargs) as conn:
-        restart_services(conn)
+        restart_services(conn, port)
 
 
-def restart_services(conn):
-    """Helper function to restart services"""
+def restart_services(conn, port):
+    """Helper function to restart services on a specific port"""
+    process_name = f"{APP_NAME}-{port}"
     with conn.cd(f"{REMOTE_PATH}/backend"):
-        # Stop existing processes
-        conn.run(f"pm2 delete {APP_NAME} || true", warn=True)
-
-        # Start the application
-        conn.run(f"pm2 start 'venv/bin/python -m app.main' --name {APP_NAME}")
-
-        # Save PM2 configuration
+        conn.run(f"pm2 delete {process_name} || true", warn=True)
+        conn.run(
+            f"pm2 start '{UV_BIN} run -m app.api --port {port}' --name {process_name}"
+        )
         conn.run("pm2 save")
         conn.run("pm2 startup || true", warn=True)
 
 
 @task
-def logs(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
+def logs(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH, port=DEFAULT_PORT):
     """View application logs"""
     connect_kwargs = {"key_filename": os.path.expanduser(key_path)}
+    process_name = f"{APP_NAME}-{port}"
     with Connection(f"{user}@{host}", connect_kwargs=connect_kwargs) as conn:
-        conn.run(f"pm2 logs {APP_NAME}")
+        conn.run(f"pm2 logs {process_name}")
 
 
 @task
@@ -125,5 +117,3 @@ def status(c, host=REMOTE_HOST, user=REMOTE_USER, key_path=SSH_KEY_PATH):
     connect_kwargs = {"key_filename": os.path.expanduser(key_path)}
     with Connection(f"{user}@{host}", connect_kwargs=connect_kwargs) as conn:
         conn.run("pm2 status")
-
-
