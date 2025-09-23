@@ -20,5 +20,6 @@ dependencies = [
     "fabric>=3.2.2",
     "langchain>=0.3.27",
     "tavily-python",
+    "serpapi>=0.1.5",
 ]
 requires-python = ">=3.10"
